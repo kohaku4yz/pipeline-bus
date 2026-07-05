@@ -1,43 +1,43 @@
-# pipeline-bus · 把订阅制便宜模型串成一条自动化 CI/CD
+# pipeline-bus · 多端・多实例协作 CI/CD
 
-> TL;DR — A pure-git autonomous pipeline: cheap assistant models as implementers, mid-tier as reviewers, expensive model only for final gate. No server, no message queue, just a GitHub repo that doubles as a task bus.
+> TL;DR — A pure-git autonomous pipeline: high-throughput models for implementation, mid-tier models for automated review, and frontier models exclusively for final gatekeeping. Zero infrastructure—just a GitHub repo acting as the task bus.
 
 ---
 
 ## 1. 这是什么
 
-一条**全自动化开发流水线**。Owner 在派单端写一张任务单 → push 到这个 repo → 实现端（订阅制便宜模型）的 poller 自动认领、读单子、产出代码到 `work/NNN/`、push 上自己的 working branch → 审查端（中档模型）的 reviewer 自动对照验收标准批注 → Owner 终审一笔把成品落地到目标 repo。
+一条**全自动化开发流水线**。Owner 在派单端写一张任务单 → push 到这个 repo → 实现端（高cp值模型）的 poller 自动认领、读单子、产出代码到 `work/NNN/`、push 上自己的 working branch → 审查端（中档模型）的 reviewer 自动对照验收标准批注 → Owner 终审一笔把成品落地到目标 repo。人只需和派单端对接。本implementation为双端双claude code间的协作。
 
 整个系统的**唯一传输层是 GitHub**，没有 webhook、没有消息队列、没有后台进程对进程通信 — 两个 `cron` 脚本（两端各一个）各扫各的状态，靠 git push 来回通讯。
 
 ```
-┌─────────────┐    push task单 + status     ┌──────────────────┐
-│   派单端     │ ────────────────────────▶  │   pipeline-bus    │
-│  (Owner)    │                            │   (this repo)     │
+┌─────────────┐    push task单 + status    ┌──────────────────┐
+│   派单端     │ ────────────────────────▶ │   pipeline-bus   │
+│  (Owner)    │                            │   (this repo)    │
 └─────────────┘                            └────────┬─────────┘
                                                     │ poll
                                 ┌───────────────────┴──────────────────┐
                                 ▼                                       ▼
                        ┌─────────────────┐                     ┌─────────────────┐
-                       │    实现端        │ ── push branch ──▶  │     审查端       │
-                       │  实现工人模型     │                     │   审查官模型      │
-                       │  (cron poller)  │ ◀── review批注 ──  │  (cron reviewer)│
+                       │    实现端       │ ── push branch ──▶  │     审查端      │
+                       │  实现工人模型    │                     │   审查官模型     │
+                       │  (cron poller)  │ ◀── review批注 ──   │  (cron reviewer)│
                        └─────────────────┘                     └────────┬────────┘
-                                                                       │ approved/stuck
-                                                                       ▼
-                                                              ┌─────────────────┐
-                                                              │     Owner       │
-                                                              │   终审 + 落地    │
-                                                              └─────────────────┘
+                                                                        │ approved/stuck
+                                                                        ▼
+                                                               ┌─────────────────┐
+                                                               │     Owner       │
+                                                               │   终审 + 落地    │
+                                                               └─────────────────┘
 ```
 
 ### 适用场景
 
 你的工作流长这样 → 就该用:
 
-- 有**订阅制便宜模型**（速度够、能干粗活）当实现工人
-- 有**中档模型**当审查官（静态代码 review + 验收标准对照）
-- 有**贵模型**只用来**终审 + 写关键决策**（不浪费在常见 bug 上）
+- 有**订阅制高cp值模型**（速度够、能干粗活）当实现端
+- 有**辅助审查模型**当审查官（静态代码 review + 验收标准对照）
+- 有**核心决策模型**只负责**终审 + 写关键决策**（不浪费在常见 bug 上）
 - 想把"派活 → 干活 → 审 → 落地"自动化,**不想**自建后端服务或维护消息队列
 - 任务单可以写成**可测**的验收标准（每条都要靠"跑一个命令看结果"判定过没过）
 
@@ -47,10 +47,10 @@
 
 | 角色 | 谁干 | 干几次 |
 |---|---|---|
-| **派单端** | Owner（你）| 每任务 1 次（写任务单）|
-| **实现端** | 实现工人模型 | 每任务 1-2 轮 |
-| **审查端** | 审查官模型 | 每任务 1-2 轮 |
-| **终审端** | Owner（你）| 每任务 1 次（拿到成品落地）|
+| **派单端** | 核心决策者| 每任务 1 次（写任务单）|
+| **实现端** | 基础实现模型 | 每任务 1-2 轮 |
+| **审查端** | 辅助审查模型 | 每任务 1-2 轮 |
+| **终审端** | 核心决策者| 每任务 1 次（拿到成品落地）|
 
 ---
 
@@ -253,7 +253,7 @@ main "$@"; exit
 
 ## 5. FAQ
 
-### Q: 怎么换打工人模型？
+### Q: 怎么换打工模型？
 
 A: **零改动 `poller.sh`**。模型来自两层:
 1. 实现端环境变量 `PIPELINE_MODEL`(优先级最高)
