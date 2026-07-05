@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# pipeline-bus 通知 hook 模板(可选)
+#
+# 触发场景:
+#   - 审查 verdict = approved  → 等 Owner 终审 + 落地
+#   - 审查 verdict = stuck     → 2 轮未过,需人工
+#
+# 复制为 notify.sh,加可执行位,然后用 PIPELINE_NOTIFY 环境变量指向它:
+#   cp notify.sh.example notify.sh && chmod +x notify.sh
+#   export PIPELINE_NOTIFY="$PWD/notify.sh"
+#
+# 接法举例:
+#   - Telegram bot: curl -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" -d "chat_id=$CHAT_ID&text=$msg"
+#   - 飞书 / 钉钉 / Discord / Slack: 类似 webhook
+#   - 邮件:         mail -s "pipeline-bus alert" you@example.com <<<"$msg"
+#   - 啥都不做:     留空,默认就是啥都不做
+#
+# 注意安全: 通知 hook 在 cron 上下文跑,确保它可信,且不要把消息发给外人。
+# 输入参数: $1 = 一句话描述(状态 + 任务号 + 落地指引)
+
+msg="$1"
+
+# === 在这里接你的通知后端 ===
+# 例: 写到本地日志便于调试
+echo "[$(date -Is)] $msg" >> /tmp/pipeline_notify.log
+
+# 例: Telegram(取消注释并填 TOKEN/CHAT_ID)
+# curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+#      -d "chat_id=${TELEGRAM_CHAT_ID}" \
+#      -d "text=${msg}" >/dev/null
+
+# 例: 通用 webhook(取消注释并填 URL)
+# curl -sS -X POST "${PIPELINE_WEBHOOK_URL}" \
+#      -H "Content-Type: application/json" \
+#      -d "{\"text\": \"${msg}\"}" >/dev/null
