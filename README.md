@@ -71,7 +71,7 @@ git add tasks/100-my-task.md status/100.json && git commit -m "task 100: 派单"
 
 完事。后面的事全自动。
 
-### 实现端（订阅制便宜模型所在机器）
+### 实现端（订阅制高cp值模型所在机器）
 
 ```bash
 # 1. clone + 装 cron
@@ -124,130 +124,52 @@ crontab -e   # 加一条: */10 * * * * bash ~/pipeline-bus/vps/reviewer_poll.sh
 
 | 阶段 | 模型档 | token 量级（一次轮）|
 |---|---|---|
-| 实现 | 订阅便宜模型 | 50k – 200k |
+| 实现 | 订阅制高cp值模型 | 50k – 200k |
 | 审查 | 中档模型 | 30k – 80k |
 | 终审 | Owner（你自己）| 0 token |
 
 2 轮的总成本大约 160k – 560k tokens,**1 美元能跑好几个任务**。这就是把它设计成"小任务流水线"而不是"大工程开发平台"的根本原因 — 每个任务应该是**一个**补丁、**一个**文档、**一个**小工具,不是"重构整个子系统"。
 
+> 📌 部署前必读:[`docs/PITFALLS.md`](docs/PITFALLS.md) — 七条实战踩坑录,都是这套系统 24/7 跑下来打磨过的。
+
 ---
 
-## 4. 实战踩坑录（七坑）
+## 4. 仓库结构
 
-每坑格式:**现象 → 根因 → 修法**。这些坑都是这套系统在真实 24/7 跑下来打磨过的,部署前必读。
-
-### 坑① Root 用户不能用 `--dangerously-skip-permissions`
-
-**现象**:审查端的 VPS 是 root 跑的,想偷懒给审查官 `--dangerously-skip-permissions` 全权限,直接被拒绝(`--dangerously-skip-permissions` 不允许在 root 下使用)。
-
-**根因**:Anthropic 客户端出于安全考虑显式禁止 root + 全权限组合(怕你写个 rm -rf / 的 prompt 把根目录清了)。
-
-**修法**:改用 `--allowedTools` 白名单。审查官只需要 Read + 写一个文件,白名单够用且不敢越界:
-
-```bash
-claude -p "..." \
-  --allowedTools "Read,Glob,Grep,Write,Edit,Bash(git *),Bash(ls *),Bash(cat *),Bash(head *),Bash(wc *),Bash(python3 -c *)"
+```
+.
+├── README.md                 ← 你正在读的
+├── PROTOCOL.md               ← 状态机 / branch 策略 / 落地模式（开发者参考）
+├── CLAUDE.md                 ← 实现端工程师须知（给实现模型看的工作手册）
+├── LICENSE                   ← MIT
+├── tasks/000-example.md      ← 示例任务单
+├── wsl/
+│   ├── poller.sh             ← 实现端 cron 脚本（已加固 7 次实战踩坑）
+│   └── SETUP.md              ← 实现端安装说明
+├── vps/
+│   ├── reviewer_poll.sh      ← 审查端 cron 脚本（白名单 allowedTools）
+│   ├── SETUP.md              ← 审查端安装说明 + crontab + 通知 hook
+│   └── notify.sh.example     ← 空壳通知 hook 模板
+├── analytics/
+│   └── stats.py              ← 零依赖的 per-task 阶段报告脚本
+└── docs/
+    ├── PITFALLS.md           ← 七坑实战记录
+    └── ANALYTICS.md          ← Analytics 详细文档（示例输出 / token 归因 / caveats）
 ```
 
-实现端因为通常不是 root,可以保留 `--dangerously-skip-permissions`(poller 只在 bus repo 里干活,任务单来源是封闭的可信通道)。
+---
 
-### 坑② Cron 裸 PATH 找不到 claude
+## 📊 Analytics (optional)
 
-**现象**:把 poller 挂到 crontab,第一次触发直接失败,日志报 `claude: command not found`。手动 `bash poller.sh` 跑得好好的。
-
-**根因**:cron 环境的 `PATH` 很干净,通常只有 `/usr/bin:/bin`,**没有** `~/.local/bin`(claude CLI 的默认安装位置)。登录 shell 里的 `~/.bashrc` 不被 cron 加载,所以手动跑没事 cron 跑就废。
-
-**修法**:`poller.sh` 开头加一行硬编码 PATH:
+零依赖的 per-task 阶段报告脚本,纯读 `git log` + 本地 Claude session jsonl 重建 `queue → claim → submit → verdict → merged` 时间线。基础用法:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+python3 analytics/stats.py           # terminal table (default)
+python3 analytics/stats.py --md      # markdown table for the README
+python3 analytics/stats.py --tokens  # append in_tok / out_tok / sess columns
 ```
 
-比改 crontab 条目更可靠(无论调度器是 cron / systemd-timer / Windows 任务计划,这行都在)。
-
-### 坑③ Claude 跑挂时状态卡死
-
-**现象**:claude 因为网络/额度/神秘原因崩了,poller 没处理,任务永远卡在 `doing` 状态,后面所有任务都排不上去。
-
-**根因**:claude 调用失败时,poller 默认行为是直接退出 — 既不 commit 也不改状态,留下 `doing` 僵尸。
-
-**修法**:poller 把 `claude -p ...` 包在 `|| { ... }` 失败处理里:
-
-```bash
-claude -p "$PROMPT" ${MODEL:+--model "$MODEL"} --dangerously-skip-permissions >> "$LOG" 2>&1 || {
-  # 状态回滚到认领前(queued 或 changes_requested)
-  git checkout -q main
-  python3 -c "..."   # 把 state 改回认领前的值
-  git add "$sf" && git commit -qm "rollback" && gpush main
-  continue            # 跳到下一个任务
-}
-```
-
-**不留 `doing` 尸体** — 下个 tick 自动重试。连续失败多次再去翻日志。
-
-### 坑④ Round-2 实现端失忆
-
-**现象**:第一轮被打回,poller 重新认领返工时,实现端看不到自己上一轮写过什么、审查官具体批了什么。输出从零开始,根本没改上一轮的问题。
-
-**根因**:第一版 poller 每次都 `git checkout -B task/NNN main` 从 main 新开 branch,丢掉上一轮 `work/NNN/` 下的产出和 `reviews/NNN-r1.md` 批注。task branch 是实现 + 审查的**唯一历史载体**,从 main 重开等于清空记忆。
-
-**修法**:poller 认领时**先查 origin 是否已有该 branch,有就续用**:
-
-```bash
-if git fetch -q origin "task/$task" 2>/dev/null; then
-  git checkout -qB "task/$task" "origin/task/$task"
-else
-  git checkout -qB "task/$task" main
-fi
-```
-
-并把"先读上轮批注"加进 prompt 的 round ≥1 模板里。
-
-### 坑⑤ 双端并发推 main → divergent branch 猝死
-
-**现象**:派单端刚 `git push` 一张新任务单,同一瞬间 poller 也在 `git push` 一个状态变更。两个 push 之一会 fatal:`remote contains work that you do not have locally`。
-
-**根因**:两个 commit 都基于同一个 parent,谁先到谁赢,后到的 push 因为没有 fast-forward 路径直接死。
-
-**修法**:封装一个 `gpush()` 函数,push 失败就 rebase 再 retry:
-
-```bash
-gpush() {
-  local ref="${1:-main}"
-  for _ in 1 2 3; do
-    git push -q origin "$ref" && return 0
-    git pull -q --rebase origin "$ref" || return 1
-  done
-  return 1
-}
-```
-
-3 次 rebase-retry 一般够了(人类派单速度 vs cron 推状态速度,3 拍内必收敛)。**所有 push 都走 gpush,不要直接 `git push`**。
-
-### 坑⑥ Push 被服务端拒 → poller 死亡
-
-**现象**:push 因为 git hook / 大文件限制 / 临时 5xx 失败,poller 没有退路,直接 fatal 退出,**后续任务全堆在本地未 push**。
-
-**根因**:`set -euo pipefail` + 单行 `git push` 没有 fallback。
-
-**修法**:坑⑤的 `gpush` 已经覆盖 — 3 次 rebase-retry 都失败才 return 1,poller 整体因为 `set -e` 退出。下个 tick 会重试(因为状态还没改)。**不要**让 poller 在 push 失败时改状态 — 让它退出就好,把决定权留给下一轮。
-
-### 坑⑦ Git pull 把正在跑的 poller 改坏了
-
-**现象**:`poller.sh` 自己也是 git 跟踪的。`git pull` 拉到新版时,如果正在执行的 poller 实例的 bash 还在 parse 这个文件,会出现"text file busy"或者部分执行新版代码的鬼畜行为。
-
-**根因**:bash 在执行函数体前会先把整个函数定义 parse 完。如果 instance A 拿到的是旧版函数定义,**整个执行周期里都跑的是旧版**,不会被中途换掉。问题是当 A 已经进入 main,但还在执行旧版循环时收到 SIGTERM → 死 → 没有残留。
-
-**修法**:把整个脚本包进 `main()` 函数,只留 `main "$@"; exit` 一行在函数体外:
-
-```bash
-main() {
-  # ... 全部逻辑 ...
-}
-main "$@"; exit
-```
-
-这样无论怎么 `git pull`,下一次 cron 触发的实例都跑最新版;正在跑的那一票按它 parse 的旧版跑完,不受影响。
+示例输出、token 归因、跨主机 caveat 详见 [`docs/ANALYTICS.md`](docs/ANALYTICS.md)。
 
 ---
 
@@ -301,191 +223,13 @@ echo "[notify] $msg" >> /tmp/pipeline_notify.log
 
 ### Q: 任务卡在奇怪状态怎么办？
 
-A: Owner 可以手动拨回状态,下个 tick 重新处理:
+A: 先翻 `git log status/NNN.json` 看任务怎么卡的 — 通常是 race condition 或某个 poller crash 时没回滚。典型成因(模型崩、push 撞车、cron 裸 PATH)的自动修法整理在 [`docs/PITFALLS.md`](docs/PITFALLS.md) 坑①~坑⑥,按现象对号入座。
 
-```bash
-python3 -c "
-import json,datetime
-d=json.load(open('status/NNN.json'))
-d['state']='changes_requested'    # 或 'queued',看想让谁重做
-d['updated']=datetime.datetime.now().astimezone().isoformat()
-json.dump(d,open('status/NNN.json','w'),ensure_ascii=False)"
-git add status/NNN.json && git commit -m "task NNN: unstuck" && git push
-```
-
-**先翻 commit 历史**(`git log status/NNN.json`)看任务怎么卡的 — 通常是 race condition 或某个 poller crash 时没回滚。
+如果 poller 自己救不了(比如 cron 停了、你想强制重做),Owner 手动改 `status/NNN.json` 的命令整理在 [`docs/PITFALLS.md`](docs/PITFALLS.md) 末尾「Owner 手动解卡」一节。
 
 ---
 
-## 6. 仓库结构
-
-```
-.
-├── README.md                 ← 你正在读的
-├── PROTOCOL.md               ← 状态机 / branch 策略 / 落地模式（开发者参考）
-├── CLAUDE.md                 ← 实现端工程师须知（给实现模型看的工作手册）
-├── LICENSE                   ← MIT
-├── tasks/000-example.md      ← 示例任务单
-├── wsl/
-│   ├── poller.sh             ← 实现端 cron 脚本（已加固 7 次实战踩坑）
-│   └── SETUP.md              ← 实现端安装说明
-└── vps/
-    ├── reviewer_poll.sh      ← 审查端 cron 脚本（白名单 allowedTools）
-    ├── SETUP.md              ← 审查端安装说明 + crontab + 通知 hook
-    └── notify.sh.example     ← 空壳通知 hook 模板
-```
-
----
-
-## 📊 Analytics (optional)
-
-A self-contained, zero-intrusion stats lens for your pipeline. It reads
-`git log` (no protocol code is touched) and rebuilds a per-task stage
-report — `queue → claim → submit → verdict → merged` — purely from commit
-timestamps and message patterns. A `--tokens` flag additionally pulls
-per-session input / output / cache token counts from the local Claude
-session jsonl so you can see how much each implementation round actually
-cost.
-
-The script lives at `analytics/stats.py` and uses only the Python
-standard library — no `pip install`, no extra deps to add to `wsl/SETUP.md`
-or `vps/SETUP.md`.
-
-### Usage
-
-Three commands, each one line. Run from the bus checkout root:
-
-```bash
-python3 analytics/stats.py           # terminal table (default)
-python3 analytics/stats.py --md      # markdown table for the README
-python3 analytics/stats.py --tokens  # append in_tok / out_tok / sess columns
-```
-
-The script auto-discovers the repo root by walking up to the nearest
-`.git`, so you can run it from a subdirectory too. Display timezone
-defaults to system local; override with `export PIPELINE_TZ=9` (or any
-UTC-offset-in-hours) or `python3 analytics/stats.py --tz 9`.
-
-### Example output (fictional demo data)
-
-The table below is a **fictional** snapshot — task names, durations, and
-token figures are illustrative only and bear no relation to any real
-pipeline. The format matches a real run.
-
-The `queue→claim` column shown populated here is the result of a
-**custom dispatcher** that commits a `queue task NNN — <title>`
-message at dispatch time. The shipped dispatcher only writes
-`status/NNN.json` and does **not** emit that commit, so on a default
-out-of-the-box checkout that column will render as `N/A` for every
-task until you add a queue commit of your own (see `### Caveats`
-below for the exact message shape the script looks for). Everything
-else in the table populates from the shipped poller / reviewer.
-
-Default terminal table (snippet):
-
-```
-task                        state   queue→claim  impl    review  rounds  review→merged  end-to-end  flags
------                       ------  -----------  ------  ------  ------  -------------  ----------  -----
-001-example-feature         merged  4m12s        7m38s   14m22s  1       1m18s          28m30s      —
-002-example-doc-fix         merged  6m05s        12m49s  9m14s   1       42s            28m50s      —
-003-example-bug-hunt        merged  5m51s        9m22s   11m40s  2       57s            1h12m       rework
-004-example-script-refactor merged  3m48s        6m14s   8m03s   1       35s            18m40s      —
-005-example-config-tweak    merged  8m27s        11m05s  13m48s  2       1m02s          1h25m       rework
-
-tasks        : 5
-merged       : 5
-in-flight    : 0
-throughput   : 5.30 tasks/day (over 0.94d)
-avg e2e      : 46m36s
-rework rate  : 40% (2/5)
-stuck rate   : 0% (0/5)
-```
-
-With `--tokens`, each row grows three columns on the right (`in_tok`,
-`out_tok`, `sess`) and the summary block grows a `tokens (Σ)` line.
-With `--md`, the same table is emitted in GitHub-flavored markdown,
-ready to paste into a changelog or weekly status.
-
-### Why bother running it
-
-The metrics that matter are the ones humans feel but never measure:
-
-- **rework rate** — `rounds ≥ 2` over total. A high rate means
-  implementations routinely ship with gaps a static review can catch.
-  Catching those gaps costs a fraction of what catching them in
-  production costs. Aim to drive this to single-digit percent over time.
-- **review→merged** — how long a finished review sits before an Owner
-  lands it. Often the longest single stage in a healthy pipeline.
-- **end-to-end** — `queue → merged`. The headline number for cycle time.
-
-The most useful single comparison the report makes available is
-**one-shot vs reworked**: in real deployments, tasks that pass in a
-single review round consume meaningfully less total token than tasks
-that bounce back for a second round — the second round adds the full
-cost of a fresh implementation session, plus the reviewer's, on top of
-the first round. The `--tokens` column lets you put a number on that
-delta. (Concrete numbers depend on prompt length and reviewer model; the
-script reports raw `input_tokens` / `output_tokens` /
-`cache_read_input_tokens`, not USD, so you can apply your own price
-model without re-running the report.)
-
-### Token attribution (`--tokens`)
-
-When you opt in with `--tokens`, the script walks your local
-`~/.claude/projects/` directory, opens every `<session>.jsonl` there,
-and aggregates the `message.usage` field across all assistant turns in
-that session.
-
-**Project path convention.** Each Claude Code project is keyed by the
-absolute working-directory path the session started in, with `/` replaced
-by `-`. A session launched inside `/home/alice/code/my-project` lands
-in `~/.claude/projects/-home-alice-code-my-project/`. The script
-derives the same key for the bus checkout you point it at, so it works
-for arbitrary locations without configuration.
-
-**`usage` field shape.** Each assistant message carries a `usage` dict:
-
-```json
-{
-  "input_tokens": 22300,
-  "cache_creation_input_tokens": 0,
-  "cache_read_input_tokens": 120,
-  "output_tokens": 110
-}
-```
-
-The script sums `input_tokens`, `output_tokens`,
-`cache_read_input_tokens`, and `cache_creation_input_tokens` across
-every assistant turn in a session, then attributes the session to a task
-by parsing the final `lastPrompt` record for a `tasks/NNN-*.md`
-reference. Sessions without that prompt pattern are skipped (e.g.
-interactive debugging sessions).
-
-**Graceful degradation.** If `~/.claude/projects/-<repo-key>/` does not
-exist (a fresh clone that has never run the poller), `--tokens` still
-runs — every task's token cells render as `N/A`, no exception, no
-crash. Same behavior when individual jsonl files are malformed: that
-file is skipped, the rest are summed.
-
-### Caveats
-
-- The report only sees the implementer host's session jsonl. If your
-  reviewer and your Owner run on separate hosts, each host must run
-  `stats.py --tokens` against the same checkout and you can `jq -s` the
-  results to get a cross-host view.
-- The shipped dispatcher's status update (write `status/NNN.json` +
-  push) does **not** include a `queue task NNN`-style commit message,
-  so the `queue→claim` column renders as `N/A`. If you want that cell
-  populated, have your dispatch script commit the status change with a
-  subject containing the literal word `queue` followed by `task NNN`.
-  The pattern is documented at the top of `analytics/stats.py`.
-- The script reads commits made by the shipped `poller.sh` and
-  `reviewer_poll.sh`. If you fork those scripts and rename their
-  commit subjects (e.g. drop the `(doing)` suffix), the matching regex
-  in `analytics/stats.py` must be updated in lockstep — that mapping is
-  effectively part of the protocol contract.
-
-## 7. 上手第一步
+## 6. 上手第一步
 
 1. Fork / clone 这个 repo 到你自己的账户
 2. 按 `wsl/SETUP.md` 配实现端,按 `vps/SETUP.md` 配审查端
