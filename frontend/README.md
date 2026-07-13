@@ -87,16 +87,21 @@ Minimal `frontend/data/dashboard.json` example:
     }
   ],
   "summary": {
-    "total": 1,
-    "inflight": 1,
-    "average_cycle": "—",
-    "rework_rate": "0%",
-    "throughput": "0/day"
+    "n_tasks": 1,
+    "n_inflight": 1,
+    "n_merged": 0,
+    "n_rework": 0,
+    "avg_e2e": 0,
+    "rework_rate": 0,
+    "throughput_per_day": 0
   },
   "activity": [],
   "crew": []
 }
 ```
+
+`rework_rate` is a numeric ratio from `0` to `1`; display formatting is handled
+by the renderer.
 
 ## Privacy and scope
 
