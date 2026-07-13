@@ -28,7 +28,10 @@ jobs:
       - name: Validate source
         run: |
           node --check frontend/app.js
+          node --check frontend/gif-bus-runtime.js
           python3 -m py_compile frontend/capture-preview.py
+          test -s frontend/assets/pipeline-bus-clawd-boarding.gif
+          test -s frontend/assets/pipeline-bus-parked.png
 
       - name: Install multilingual fonts
         run: |
@@ -42,8 +45,8 @@ jobs:
       - name: Capture deterministic viewports
         run: |
           mkdir -p visual-artifacts
-          # 500 ms is long enough for local JSON/CSS, but stays before the 650 ms
-          # autoplay timer so screenshots use the parked bus keyframe.
+          # Headless Chrome is detected by the GIF runtime, so visual QA captures
+          # the stable parked poster while normal browsers play the original GIF.
           python3 frontend/capture-preview.py \
             --width 1600 --height 1300 --wait-ms 500 \
             --data ./data/visual-qa.json \
