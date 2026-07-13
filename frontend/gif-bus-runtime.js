@@ -2,6 +2,7 @@ const stage = document.querySelector(".dispatch-stage");
 const replay = document.getElementById("replay-dispatch");
 const copy = document.getElementById("dispatch-copy");
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const visualQaMode = navigator.webdriver === true;
 
 if (stage) {
   const poster = "./assets/pipeline-bus-parked.png";
@@ -33,7 +34,9 @@ if (stage) {
   };
 
   replay?.addEventListener("click", playOriginalGif);
-  if (!reducedMotion.matches) window.setTimeout(playOriginalGif, 650);
+  if (!reducedMotion.matches && !visualQaMode) {
+    window.setTimeout(playOriginalGif, 650);
+  }
   reducedMotion.addEventListener?.("change", () => {
     if (reducedMotion.matches) media.src = poster;
   });
