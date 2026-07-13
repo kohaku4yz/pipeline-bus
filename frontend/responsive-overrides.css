@@ -1,3 +1,5 @@
+@import url("./gif-bus.css");
+
 /* Mobile is a structural transformation, not a squeezed desktop dashboard. */
 @media (max-width: 560px) {
   .metric-rail {
