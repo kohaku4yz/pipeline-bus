@@ -38,15 +38,19 @@ python3 frontend/capture-preview.py \
 
 Set `CHROME_BIN` when the browser executable is not discoverable automatically.
 
-## Automated visual QA
+## Visual QA
 
-`.github/workflows/visual-preview.yml` runs on changes to the frontend. It:
+This upstream patch does not add a GitHub Actions workflow. Visual checks are
+performed locally with `frontend/capture-preview.py` using synthetic data.
+Recommended viewports are:
 
-1. validates JavaScript and Python syntax;
-2. captures 1600px desktop, 1280px laptop, and 390px mobile screenshots;
-3. uploads them as a `pipeline-bus-visual-preview` workflow artifact.
+- 1600 px desktop;
+- 1280 px laptop;
+- 390 px mobile fold;
+- 390 px tall mobile route.
 
-The screenshots use synthetic data only.
+The work fork may run additional automated screenshot checks, but Pipeline Bus
+itself remains free of new CI requirements.
 
 ## Data interfaces
 
@@ -67,6 +71,31 @@ Load JSON                              local file picker
 window.pipelineBus.render(payload)    browser/runtime bridge
 window.pipelineBus.load(url)          fetch and render a JSON endpoint
 pipeline-bus:data                     CustomEvent for live injection
+```
+
+Minimal `frontend/data/dashboard.json` example:
+
+```json
+{
+  "tasks": [
+    {
+      "task": "001",
+      "title": "Example task",
+      "state": "review",
+      "round": 1,
+      "updated": "2026-07-13T12:00:00+09:00"
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "inflight": 1,
+    "average_cycle": "—",
+    "rework_rate": "0%",
+    "throughput": "0/day"
+  },
+  "activity": [],
+  "crew": []
+}
 ```
 
 ## Privacy and scope
