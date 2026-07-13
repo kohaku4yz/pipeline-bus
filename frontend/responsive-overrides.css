@@ -1,4 +1,4 @@
-@import url("./gif-bus-fix.css");
+@import url("./bus-animation.css");
 
 /* Mobile is a structural transformation, not a squeezed desktop dashboard. */
 @media (max-width: 560px) {
