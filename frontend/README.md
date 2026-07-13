@@ -75,5 +75,7 @@ pipeline-bus:data                     CustomEvent for live injection
 - No real private task payloads, token sessions, or generated live dashboard data
   belong in this public branch.
 - `frontend/data/dashboard.json` and `frontend/data/analytics.json` are ignored.
-- The pixel bus is drawn in browser JavaScript; no generated image asset is used.
-- `prefers-reduced-motion` users receive a static parked frame.
+- The dispatch bay uses the original hand-drawn 70-frame Pipeline Bus GIF stored
+  at `frontend/assets/pipeline-bus-clawd-boarding.gif`.
+- `prefers-reduced-motion` users receive the static parked frame from
+  `frontend/assets/pipeline-bus-parked.png`.
