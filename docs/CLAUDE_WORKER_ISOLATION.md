@@ -15,7 +15,7 @@ The worker receives a disposable clone so it can read the task, protocol, prior 
 - network access retained for the CLI;
 - existing host authentication left in place but read-only from the sandbox.
 
-There is no unisolated fallback. If the executable, namespace operation, read-only-root probe, writable-bind probe, timeout configuration, or private run root is invalid, the task remains unclaimed.
+There is no unisolated fallback. If the executable, namespace operation, read-only-root probe, writable-bind probe, timeout configuration, private run root, or exact task path is invalid, the task remains unclaimed or is marked for manual review before Claude starts.
 
 ## Writable-path map
 
@@ -29,6 +29,8 @@ There is no unisolated fallback. If the executable, namespace operation, read-on
 | per-run `pycache/` | read-write | Python bytecode (`PYTHONPYCACHEPREFIX`) |
 | per-run `runtime/` | read-write | XDG cache/state required by the headless CLI |
 | all other host paths | read-only | Runtime binaries, libraries, and existing authentication |
+
+Before building the bind list, the wrapper rejects symlinked `work` or `work/<task>` entries and requires the canonical worker, task, and per-run paths to equal their expected lexical paths. This prevents a pre-existing task-branch symlink from turning the exact writable bind into an external host write.
 
 The wrapper still snapshots the disposable clone before and after execution. A second, fresh submission clone receives only validated ordinary files under `work/<task>/`. The existing checks for moved HEAD, out-of-scope paths, symlinks, unsupported file types, secret-shaped names, and empty output remain active.
 
@@ -71,13 +73,14 @@ The hermetic worker suite verifies:
 2. Codex flags and task submission remain unchanged;
 3. invalid Claude-only configuration does not gate Codex;
 4. missing/unusable bubblewrap and invalid run roots fail before claim;
-5. post-run validation still quarantines out-of-scope output and worker-created commits;
-6. repository `.pyc` and `__pycache__` paths are rejected;
-7. explicit `python3 -m py_compile` places bytecode only under external `PYTHONPYCACHEPREFIX`;
-8. external scratch can be modified without changing source files;
-9. worker failure rolls back state and cleans the run directory;
-10. a real `TERM` reaches the managed child, reaps it, cleans the run directory, and rolls back the task;
-11. `flock` still permits only one claimant;
-12. when the host supports bubblewrap, real mount-boundary cases prove that source/sibling writes and Git index writes fail while task output and read-only Git inspection work.
+5. a hostile pre-existing task symlink is rejected before Claude starts and cannot write outside the clone;
+6. post-run validation still quarantines out-of-scope output and worker-created commits;
+7. repository `.pyc` and `__pycache__` paths are rejected;
+8. explicit `python3 -m py_compile` places bytecode only under external `PYTHONPYCACHEPREFIX`;
+9. external scratch can be modified without changing source files;
+10. worker failure rolls back state and cleans the run directory;
+11. a real `TERM` reaches the managed child, reaps it, cleans the run directory, and rolls back the task;
+12. `flock` still permits only one claimant;
+13. when the host supports bubblewrap, real mount-boundary cases prove that source/sibling writes and Git index writes fail while task output and read-only Git inspection work.
 
 The real mount-boundary cases skip explicitly on hosts where bubblewrap is unavailable or user namespaces are disabled; deployment must pass the same production preflight before a Claude task can be claimed.
