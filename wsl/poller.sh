@@ -449,11 +449,29 @@ PY
   run_claude() {
     local wt="$1" task_id="$2" round_no="$3" prompt="$4" run_dir="$5"
     local task_dir isolation_dir child_pid="" timer_pid="" rc=1 interrupted=0 timeout_marker
+    local canonical_wt canonical_task canonical_isolation
     local -a cmd
 
     task_dir="$wt/work/$task_id"
     [ -d "$task_dir" ] && [ ! -L "$task_dir" ] || return 1
     isolation_dir=$(create_claude_run_dir "$task_id" "$round_no") || return 1
+    canonical_wt=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$wt" 2>/dev/null) || {
+      cleanup_claude_run_dir "$isolation_dir" || true
+      return 1
+    }
+    canonical_task=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$task_dir" 2>/dev/null) || {
+      cleanup_claude_run_dir "$isolation_dir" || true
+      return 1
+    }
+    canonical_isolation=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$isolation_dir" 2>/dev/null) || {
+      cleanup_claude_run_dir "$isolation_dir" || true
+      return 1
+    }
+    if [ "$canonical_wt" != "$wt" ] || [ "$canonical_task" != "$task_dir" ] ||
+       [ "$canonical_isolation" != "$isolation_dir" ]; then
+      cleanup_claude_run_dir "$isolation_dir" || true
+      return 1
+    fi
     timeout_marker="$run_dir/claude.timeout"
     rm -f -- "$timeout_marker"
 
@@ -613,7 +631,7 @@ PY
     fi
 
     if [ "$worker" = claude ]; then
-      if [ -L "$wt/work/$task" ] || ! mkdir -p -- "$wt/work/$task"; then
+      if [ -L "$wt/work" ] || [ -L "$wt/work/$task" ] || ! mkdir -p -- "$wt/work/$task"; then
         log "task $task: cannot prepare exact writable Claude task directory"
         update_status "$sf" stuck "task $task: invalid Claude writable path"
         continue
